@@ -8,10 +8,16 @@
 *{box-sizing:border-box}
 body{margin:0;background:#102b5c;color:#fff;font-family:Arial,Helvetica,sans-serif;min-height:100vh}
 .wrap{max-width:1400px;margin:0 auto;padding:28px}
-.header{text-align:center;margin-bottom:24px}
+.header{text-align:center;margin-bottom:18px}
 h1{margin:0;font-size:clamp(28px,4vw,48px);letter-spacing:1px}
 .subtitle{font-size:clamp(16px,2vw,24px);margin-top:8px}
-.status{text-align:center;margin:10px 0 20px;font-size:15px}
+.status{text-align:center;margin:10px 0 18px;font-size:16px;font-weight:bold}
+.setup{text-align:center;margin:0 auto 22px;padding:16px;background:rgba(255,255,255,.1);border-radius:12px;max-width:720px}
+.setup h3{margin:0 0 10px}
+.setup input{font-size:18px;padding:10px;border-radius:7px;border:0;width:180px;text-transform:uppercase;text-align:center}
+.setup button,.roleBtn{border:0;border-radius:8px;padding:11px 16px;font-size:16px;font-weight:bold;cursor:pointer;margin:5px}
+.roleBtn{background:#fff;color:#102b5c}
+.primary{background:#1c4c91;color:#fff}
 .teams{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
 .team{background:#fff;color:#14213d;border-radius:16px;padding:18px;box-shadow:0 5px 18px rgba(0,0,0,.25)}
 .team h2{margin:0 0 10px;text-align:center;font-size:25px}
@@ -22,7 +28,8 @@ button.add{background:#1c4c91;color:white}
 button:hover{filter:brightness(1.08)}
 .controls{text-align:center;margin-top:25px}
 .reset{background:#fff;color:#102b5c;padding:13px 24px;font-size:17px}
-.displayOnly{text-align:center;margin-top:18px;font-size:14px;opacity:.9}
+.note{text-align:center;margin-top:16px;font-size:14px;opacity:.9}
+.hidden{display:none}
 @media(max-width:900px){.teams{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:520px){.teams{grid-template-columns:1fr}.wrap{padding:15px}}
 </style>
@@ -33,46 +40,60 @@ button:hover{filter:brightness(1.08)}
     <h1>BIBLE WEEK JEOPARDY</h1>
     <div class="subtitle">“Speak Lord, Your Servant is Listening”</div>
   </div>
-  <div class="status" id="status">Connecting...</div>
+
+  <div class="status" id="status">Choose a device role</div>
+
+  <div class="setup" id="roleSetup">
+    <h3>Two-Device Scoreboard</h3>
+    <button class="roleBtn primary" onclick="startController()">SCORER / CONTROLLER</button>
+    <button class="roleBtn" onclick="showDisplaySetup()">PROJECTOR DISPLAY</button>
+  </div>
+
+  <div class="setup hidden" id="controllerSetup">
+    <h3>Scorer / Controller</h3>
+    <div>Give this room code to the projector laptop:</div>
+    <div style="font-size:34px;font-weight:bold;letter-spacing:6px;margin:10px" id="roomCode">------</div>
+    <div id="connectionText">Waiting for projector display to connect...</div>
+  </div>
+
+  <div class="setup hidden" id="displaySetup">
+    <h3>Projector Display</h3>
+    <div>Enter the room code shown on the scorer laptop:</div>
+    <div style="margin-top:10px">
+      <input id="roomInput" maxlength="6" placeholder="ROOM CODE">
+      <button class="roleBtn primary" onclick="connectDisplay()">CONNECT</button>
+    </div>
+    <div id="displayConnectionText" style="margin-top:8px"></div>
+  </div>
+
   <div class="teams" id="teams"></div>
-  <div class="controls">
+
+  <div class="controls" id="controls">
     <button class="reset" onclick="resetScores()">RESET ALL SCORES</button>
   </div>
-  <div class="displayOnly" id="displayOnly"></div>
+
+  <div class="note" id="note"></div>
 </div>
 
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 const points=[100,200,300,400,500];
-const STORAGE_KEY="bibleWeekJeopardyScores_v2";
-
 let teams=[
   {name:"TEAM 1",score:0},
   {name:"TEAM 2",score:0},
   {name:"TEAM 3",score:0},
   {name:"TEAM 4",score:0}
 ];
-
-const params=new URLSearchParams(location.search);
-const mode=params.get("mode")==="display" ? "display" : "control";
-
-function saveScores(){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(teams));
-  render();
-}
-
-function loadScores(){
-  try{
-    const saved=JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if(Array.isArray(saved) && saved.length===4) teams=saved;
-  }catch(e){}
-}
+let mode=null;
+let peer=null;
+let conn=null;
 
 function render(){
   document.getElementById("teams").innerHTML=teams.map((team,i)=>`
     <div class="team">
       <h2>${team.name}</h2>
       <div class="score">${team.score}</div>
-      ${mode==="control" ? `
+      ${mode==="controller" ? `
       <div class="buttons">
         ${points.map(p=>`<button class="add" onclick="changeScore(${i},${p})">+${p}</button>`).join("")}
       </div>
@@ -81,34 +102,117 @@ function render(){
       </div>` : ""}
     </div>
   `).join("");
+  document.getElementById("controls").classList.toggle("hidden", mode!=="controller");
+}
 
-  document.getElementById("status").textContent =
-    mode==="control" ? "SCORER / CONTROLLER" : "PROJECTOR DISPLAY";
-  document.getElementById("displayOnly").textContent =
-    mode==="display" ? "Display-only mode — scores are controlled from the scorer device." : "";
+function updateDisplay(){
+  render();
+  if(mode==="controller" && conn && conn.open){
+    conn.send({type:"scores",teams:teams});
+  }
 }
 
 function changeScore(i,amount){
   teams[i].score += amount;
-  saveScores();
+  updateDisplay();
 }
 
 function resetScores(){
   if(confirm("Reset all four team scores to zero?")){
     teams.forEach(t=>t.score=0);
-    saveScores();
+    updateDisplay();
   }
 }
 
-loadScores();
-render();
+function makeRoomCode(){
+  return Math.random().toString(36).substring(2,8).toUpperCase();
+}
 
-window.addEventListener("storage", e=>{
-  if(e.key===STORAGE_KEY){
-    loadScores();
-    render();
+function startController(){
+  mode="controller";
+  document.getElementById("roleSetup").classList.add("hidden");
+  document.getElementById("controllerSetup").classList.remove("hidden");
+  document.getElementById("status").textContent="SCORER / CONTROLLER";
+  document.getElementById("note").textContent="Use the + buttons for correct answers and the − buttons for incorrect answers.";
+  render();
+
+  const code=makeRoomCode();
+  document.getElementById("roomCode").textContent=code;
+
+  peer=new Peer("bwj-"+code,{
+    host:"0.peerjs.com",
+    port:443,
+    secure:true,
+    path:"/"
+  });
+
+  peer.on("open",()=>{
+    document.getElementById("connectionText").textContent="Waiting for projector display to connect...";
+  });
+
+  peer.on("connection",(c)=>{
+    conn=c;
+    document.getElementById("connectionText").textContent="PROJECTOR CONNECTED ✓";
+    conn.on("open",()=>conn.send({type:"scores",teams:teams}));
+    conn.on("close",()=>{
+      document.getElementById("connectionText").textContent="Projector disconnected — waiting for reconnection...";
+    });
+  });
+
+  peer.on("error",(err)=>{
+    document.getElementById("connectionText").textContent="Connection error. Refresh and try again.";
+    console.error(err);
+  });
+}
+
+function showDisplaySetup(){
+  mode="display";
+  document.getElementById("roleSetup").classList.add("hidden");
+  document.getElementById("displaySetup").classList.remove("hidden");
+  document.getElementById("status").textContent="PROJECTOR DISPLAY";
+  document.getElementById("controls").classList.add("hidden");
+  document.getElementById("note").textContent="Display-only mode — scores are controlled from the scorer laptop.";
+  render();
+}
+
+function connectDisplay(){
+  const code=document.getElementById("roomInput").value.trim().toUpperCase();
+  if(code.length!==6){
+    document.getElementById("displayConnectionText").textContent="Please enter the 6-character room code.";
+    return;
   }
-});
+
+  document.getElementById("displayConnectionText").textContent="Connecting...";
+  peer=new Peer({
+    host:"0.peerjs.com",
+    port:443,
+    secure:true,
+    path:"/"
+  });
+
+  peer.on("open",()=>{
+    conn=peer.connect("bwj-"+code);
+    conn.on("open",()=>{
+      document.getElementById("displayConnectionText").textContent="CONNECTED ✓";
+    });
+    conn.on("data",(data)=>{
+      if(data && data.type==="scores" && Array.isArray(data.teams)){
+        teams=data.teams;
+        render();
+      }
+    });
+    conn.on("close",()=>{
+      document.getElementById("displayConnectionText").textContent="Connection closed. Refresh both devices to reconnect.";
+    });
+  });
+
+  peer.on("error",(err)=>{
+    document.getElementById("displayConnectionText").textContent="Could not connect. Check the room code and internet connection.";
+    console.error(err);
+  });
+}
+
+render();
 </script>
 </body>
 </html>
