@@ -167,6 +167,11 @@ function startController(){
 
 function showDisplaySetup(){
   mode="display";
+  const savedCode=localStorage.getItem("roomCode");
+  if(savedCode) document.getElementById("roomInput").value=savedCode;
+  if(savedCode){
+    connectDisplay();
+  }
   document.getElementById("roleSetup").classList.add("hidden");
   document.getElementById("displaySetup").classList.remove("hidden");
   document.getElementById("status").textContent="PROJECTOR DISPLAY";
@@ -177,6 +182,7 @@ function showDisplaySetup(){
 
 function connectDisplay(){
   const code=document.getElementById("roomInput").value.trim().toUpperCase();
+  localStorage.setItem("roomCode",code);
   if(code.length!==6){
     document.getElementById("displayConnectionText").textContent="Please enter the 6-character room code.";
     return;
